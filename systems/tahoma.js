@@ -56,19 +56,22 @@ class TahomaClient {
   }
 
   async getStatus(devices) {
-    const setup  = await this.call('GET', '/setup');
+    const entries = Object.entries(devices).filter(([, url]) => url);
+    const results = await Promise.all(entries.map(async ([name, deviceURL]) => {
+      try {
+        const states = await this.call('GET', `/setup/devices/${encodeURIComponent(deviceURL)}/states`);
+        const map = {};
+        (Array.isArray(states) ? states : []).forEach(s => { map[s.name] = s.value; });
+        const open     = map['core:OpenClosedState'];
+        const moving   = map['core:MovingState'];
+        const isMoving = moving === true || moving === 'true' || moving === 1;
+        return [name, isMoving ? 'moving' : open === 'open' ? 'open' : 'closed'];
+      } catch {
+        return [name, null]; // état inconnu si l'appel échoue pour cet appareil
+      }
+    }));
     const result = {};
-    for (const [name, deviceURL] of Object.entries(devices)) {
-      if (!deviceURL) continue;
-      const device = setup.devices?.find(d => d.deviceURL === deviceURL);
-      if (!device) continue;
-      const states = {};
-      (device.states || []).forEach(s => { states[s.name] = s.value; });
-      const open   = states['core:OpenClosedState'];
-      const moving = states['core:MovingState'];
-      const isMoving = moving === true || moving === 'true' || moving === 1;
-      result[name] = isMoving ? 'moving' : open === 'open' ? 'open' : 'closed';
-    }
+    results.forEach(([name, state]) => { if (state) result[name] = state; });
     return result;
   }
 
