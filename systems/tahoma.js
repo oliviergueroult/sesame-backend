@@ -44,7 +44,7 @@ class TahomaClient {
   async discoverDevices() {
     const setup   = await this.call('GET', '/setup');
     const devices = {};
-    console.log('[TaHoma] devices found:', (setup.devices || []).map(d => `${d.label} [${d.controllableName}]`));
+    (setup.devices || []).forEach(d => console.log(`[device] "${d.label}" → ${d.controllableName} (${d.deviceURL})`));
     for (const d of (setup.devices || [])) {
       const label = d.label || '';
       const ctrl  = d.controllableName || '';
@@ -93,10 +93,12 @@ class TahomaClient {
 
   async exec(deviceURL, command, parameters = []) {
     console.log(`[TaHoma] exec ${deviceURL} → ${command}`, parameters);
-    return this.call('POST', '/exec/apply', {
+    const result = await this.call('POST', '/exec/apply', {
       label: `Sésame — ${command}`,
       actions: [{ deviceURL, commands: [{ name: command, parameters }] }],
     });
+    console.log(`[TaHoma] exec result:`, JSON.stringify(result));
+    return result;
   }
 }
 
