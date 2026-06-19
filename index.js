@@ -62,8 +62,12 @@ app.post('/auth/login', async (req, res) => {
   if (!rows[0]) return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
   const ok = await bcrypt.compare(password, rows[0].password);
   if (!ok)  return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
-  const token = jwt.sign({ id: rows[0].id, email: rows[0].email }, JWT_SECRET, { expiresIn: '365d' });
-  res.json({ token });
+  if (!rows[0].is_active) return res.status(403).json({ error: 'Compte désactivé' });
+  const token = jwt.sign(
+    { id: rows[0].id, email: rows[0].email, is_admin: rows[0].is_admin },
+    JWT_SECRET, { expiresIn: '365d' }
+  );
+  res.json({ token, is_admin: rows[0].is_admin });
 });
 
 // ── GET /config ──────────────────────────────────────────────────────────────
