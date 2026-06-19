@@ -46,15 +46,18 @@ class TahomaClient {
     const devices = {};
     (setup.devices || []).forEach(d => console.log(`[device] "${d.label}" → ${d.controllableName} (${d.deviceURL})`));
     for (const d of (setup.devices || [])) {
-      const label = d.label || '';
-      const ctrl  = d.controllableName || '';
-      // Portail : label ou controllableName
-      if (!devices.portail && (/gate|portail|barrier|entr[ée]e|porte.ext/i.test(label) || /Gate|Pedestrian/i.test(ctrl)))
+      const label    = d.label || '';
+      const ctrl     = d.controllableName || '';
+      const protocol = d.deviceURL?.split('://')[0] || '';
+      // Exclure les protocoles non-physiques pour portail/garage
+      const isPhysical = !['hue', 'zwave', 'enocean'].includes(protocol);
+      // Portail : label ou controllableName (Gate mais PAS Gateway)
+      if (!devices.portail && isPhysical && (/portail|barrier/i.test(label) || /Gate(?!way)/i.test(ctrl)))
         devices.portail = d.deviceURL;
       // Garage
-      if (!devices.garage && (/garage/i.test(label) || /Garage/i.test(ctrl)))
+      if (!devices.garage && isPhysical && (/garage/i.test(label) || /Garage/i.test(ctrl)))
         devices.garage = d.deviceURL;
-      // Alarme : label OU controllableName (AlarmController, AlarmIO, AlarmSystem, Siren)
+      // Alarme : label OU controllableName
       if (!devices.alarm && (/alarm|alarme|sir[eè]ne/i.test(label) || /Alarm|Siren/i.test(ctrl)))
         devices.alarm = d.deviceURL;
     }
