@@ -44,12 +44,19 @@ class TahomaClient {
   async discoverDevices() {
     const setup   = await this.call('GET', '/setup');
     const devices = {};
-    const labels  = (setup.devices || []).map(d => d.label);
-    console.log('[TaHoma] devices found:', labels);
+    console.log('[TaHoma] devices found:', (setup.devices || []).map(d => `${d.label} [${d.controllableName}]`));
     for (const d of (setup.devices || [])) {
-      if (/gate|portail|barrier|entr[ée]e|porte.ext/i.test(d.label) && !devices.portail) devices.portail = d.deviceURL;
-      if (/garage/i.test(d.label)                                   && !devices.garage)  devices.garage  = d.deviceURL;
-      if (/alarm|alarme|sir[eè]ne/i.test(d.label)                   && !devices.alarm)   devices.alarm   = d.deviceURL;
+      const label = d.label || '';
+      const ctrl  = d.controllableName || '';
+      // Portail : label ou controllableName
+      if (!devices.portail && (/gate|portail|barrier|entr[ée]e|porte.ext/i.test(label) || /Gate|Pedestrian/i.test(ctrl)))
+        devices.portail = d.deviceURL;
+      // Garage
+      if (!devices.garage && (/garage/i.test(label) || /Garage/i.test(ctrl)))
+        devices.garage = d.deviceURL;
+      // Alarme : label OU controllableName (AlarmController, AlarmIO, AlarmSystem, Siren)
+      if (!devices.alarm && (/alarm|alarme|sir[eè]ne/i.test(label) || /Alarm|Siren/i.test(ctrl)))
+        devices.alarm = d.deviceURL;
     }
     console.log('[TaHoma] matched:', devices);
     return devices;
