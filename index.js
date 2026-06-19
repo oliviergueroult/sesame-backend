@@ -71,6 +71,8 @@ class TahomaClient {
         this.devices.portail = d.deviceURL;
       if (/garage/i.test(d.label) && !this.devices.garage)
         this.devices.garage = d.deviceURL;
+      if (/alarm|alarme|sirene/i.test(d.label) && !this.devices.alarm)
+        this.devices.alarm = d.deviceURL;
     }
     console.log('[TaHoma] Appareils :', this.devices);
   }
@@ -118,6 +120,26 @@ app.post('/open', auth, async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     console.error(`[OPEN] ${door} ✗`, e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /alarm ──────────────────────────────────────────────────────────────
+app.post('/alarm', auth, async (req, res) => {
+  const { action } = req.body; // 'arm' | 'disarm'
+  if (!tahoma) return res.status(503).json({ error: 'TaHoma non configuré' });
+  const deviceURL = tahoma.devices.alarm;
+  if (!deviceURL) return res.status(404).json({ error: 'Alarme introuvable dans TaHoma' });
+  try {
+    const cmd = action === 'arm' ? 'arm' : 'disarm';
+    await tahoma.call('POST', '/exec/apply', {
+      label: `Sésame — alarme ${cmd}`,
+      actions: [{ deviceURL, commands: [{ name: cmd, parameters: [] }] }],
+    });
+    console.log(`[ALARM] ${cmd} ✓`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(`[ALARM] ✗`, e.message);
     res.status(500).json({ error: e.message });
   }
 });
