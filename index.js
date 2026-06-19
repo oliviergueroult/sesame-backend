@@ -1,96 +1,15 @@
 const express = require('express');
 const jwt     = require('jsonwebtoken');
+const bcrypt  = require('bcryptjs');
 const cors    = require('cors');
-const axios   = require('axios');
+const { pool, init } = require('./db');
+const TahomaClient   = require('./systems/tahoma');
 
-const app = express();
+const app        = express();
+const JWT_SECRET = process.env.JWT_SECRET || 'change-me';
+
 app.use(cors());
 app.use(express.json());
-
-const JWT_SECRET       = process.env.JWT_SECRET       || 'change-me';
-const USER_EMAIL       = process.env.USER_EMAIL       || 'admin@sesame.app';
-const USER_PASSWORD    = process.env.USER_PASSWORD    || 'changeme';
-const TAHOMA_EMAIL     = process.env.TAHOMA_EMAIL;
-const TAHOMA_PASSWORD  = process.env.TAHOMA_PASSWORD;
-
-// ── Client TaHoma ────────────────────────────────────────────────────────────
-const TAHOMA_SERVERS = [
-  'https://ha101-1.overkiz.com/enduser-mobile-web/enduserAPI',
-  'https://ha201-1.overkiz.com/enduser-mobile-web/enduserAPI',
-  'https://ha401-1.overkiz.com/enduser-mobile-web/enduserAPI',
-  'https://www.tahomalink.com/enduser-mobile-web/enduserAPI',
-];
-
-class TahomaClient {
-  constructor(email, password) {
-    this.email     = email;
-    this.password  = password;
-    this.base      = null;
-    this.sessionId = null;
-    this.devices   = {}; // { portail: deviceURL, garage: deviceURL }
-  }
-
-  async login() {
-    for (const base of TAHOMA_SERVERS) {
-      try {
-        const res = await axios.post(`${base}/login`,
-          `userId=${encodeURIComponent(this.email)}&userPassword=${encodeURIComponent(this.password)}`,
-          { headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Sesame/1.0 (iPhone; iOS 17)' }, timeout: 10000 }
-        );
-        const match = JSON.stringify(res.data).match(/JSESSIONID=([^;\"]+)/);
-        const cookie = res.headers['set-cookie']?.join('').match(/JSESSIONID=([^;]+)/);
-        this.sessionId = (match?.[1] || cookie?.[1]);
-        if (this.sessionId) { this.base = base; console.log(`[TaHoma] ✓ ${base}`); return true; }
-      } catch (e) {
-        console.log(`[TaHoma] ✗ ${base} — ${e.response?.status || e.code}`);
-      }
-    }
-    return false;
-  }
-
-  headers() {
-    return { Cookie: `JSESSIONID=${this.sessionId}` };
-  }
-
-  async call(method, path, data) {
-    try {
-      const res = await axios({ method, url: `${this.base}${path}`, data, headers: this.headers(), timeout: 10000 });
-      return res.data;
-    } catch (e) {
-      if (e.response?.status === 401) { await this.login(); return this.call(method, path, data); }
-      throw e;
-    }
-  }
-
-  async discoverDevices() {
-    const setup = await this.call('GET', '/setup');
-    const devices = setup.devices || [];
-    for (const d of devices) {
-      const name = (d.label || '').toLowerCase();
-      if (/gate|portail|barrier/i.test(d.label) && !this.devices.portail)
-        this.devices.portail = d.deviceURL;
-      if (/garage/i.test(d.label) && !this.devices.garage)
-        this.devices.garage = d.deviceURL;
-      if (/alarm|alarme|sirene/i.test(d.label) && !this.devices.alarm)
-        this.devices.alarm = d.deviceURL;
-    }
-    console.log('[TaHoma] Appareils :', this.devices);
-  }
-
-  async exec(door, action) {
-    const deviceURL = this.devices[door];
-    if (!deviceURL) throw new Error(`Appareil "${door}" introuvable`);
-    const cmd = action === 'close' ? 'close' : action === 'stop' ? 'stop' : 'open';
-    return this.call('POST', '/exec/apply', {
-      label: `Sésame — ${cmd} ${door}`,
-      actions: [{ deviceURL, commands: [{ name: cmd, parameters: [] }] }],
-    });
-  }
-}
-
-const tahoma = TAHOMA_EMAIL
-  ? new TahomaClient(TAHOMA_EMAIL, TAHOMA_PASSWORD)
-  : null;
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 function auth(req, res, next) {
@@ -100,82 +19,123 @@ function auth(req, res, next) {
   catch { res.status(401).json({ error: 'Token invalide' }); }
 }
 
-// ── POST /auth/login ─────────────────────────────────────────────────────────
-app.post('/auth/login', (req, res) => {
+// ── Helpers ──────────────────────────────────────────────────────────────────
+async function getUserSystem(userId) {
+  const { rows } = await pool.query('SELECT * FROM user_systems WHERE user_id=$1', [userId]);
+  return rows[0] || null;
+}
+
+async function getClient(userId) {
+  const sys = await getUserSystem(userId);
+  if (!sys) throw new Error('Système non configuré');
+  if (sys.system_type === 'tahoma') {
+    const { email, password } = sys.credentials;
+    const client = new TahomaClient(email, password);
+    await client.login();
+    return { client, devices: sys.devices };
+  }
+  throw new Error(`Système "${sys.system_type}" non supporté`);
+}
+
+// ── POST /auth/register ──────────────────────────────────────────────────────
+app.post('/auth/register', async (req, res) => {
   const { email, password } = req.body;
-  if (email !== USER_EMAIL || password !== USER_PASSWORD)
-    return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
-  const token = jwt.sign({ email }, JWT_SECRET, { expiresIn: '365d' });
+  if (!email || !password) return res.status(400).json({ error: 'Email et mot de passe requis' });
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const { rows } = await pool.query(
+      'INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id, email',
+      [email.trim().toLowerCase(), hash]
+    );
+    const token = jwt.sign({ id: rows[0].id, email: rows[0].email }, JWT_SECRET, { expiresIn: '365d' });
+    res.json({ token, user: rows[0] });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Email déjà utilisé' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /auth/login ─────────────────────────────────────────────────────────
+app.post('/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  const { rows } = await pool.query('SELECT * FROM users WHERE email=$1', [email?.trim().toLowerCase()]);
+  if (!rows[0]) return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+  const ok = await bcrypt.compare(password, rows[0].password);
+  if (!ok)  return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+  const token = jwt.sign({ id: rows[0].id, email: rows[0].email }, JWT_SECRET, { expiresIn: '365d' });
   res.json({ token });
+});
+
+// ── GET /config ──────────────────────────────────────────────────────────────
+app.get('/config', auth, async (req, res) => {
+  const sys = await getUserSystem(req.user.id);
+  if (!sys) return res.json({ configured: false });
+  res.json({ configured: true, system_type: sys.system_type, devices: sys.devices });
+});
+
+// ── POST /config ─────────────────────────────────────────────────────────────
+app.post('/config', auth, async (req, res) => {
+  const { system_type, credentials } = req.body;
+  if (!system_type || !credentials) return res.status(400).json({ error: 'Données manquantes' });
+
+  // Test de connexion + découverte des appareils
+  let devices = {};
+  if (system_type === 'tahoma') {
+    const client = new TahomaClient(credentials.email, credentials.password);
+    const ok = await client.login();
+    if (!ok) return res.status(400).json({ error: 'Connexion TaHoma impossible — vérifiez vos identifiants' });
+    devices = await client.discoverDevices();
+  }
+
+  await pool.query(`
+    INSERT INTO user_systems (user_id, system_type, credentials, devices)
+    VALUES ($1, $2, $3, $4)
+    ON CONFLICT (user_id) DO UPDATE SET system_type=$2, credentials=$3, devices=$4, updated_at=NOW()
+  `, [req.user.id, system_type, JSON.stringify(credentials), JSON.stringify(devices)]);
+
+  res.json({ ok: true, devices });
+});
+
+// ── GET /status ──────────────────────────────────────────────────────────────
+app.get('/status', auth, async (req, res) => {
+  try {
+    const { client, devices } = await getClient(req.user.id);
+    const status = await client.getStatus(devices);
+    res.json(status);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── POST /open ───────────────────────────────────────────────────────────────
 app.post('/open', auth, async (req, res) => {
   const { door, action = 'open' } = req.body;
   if (!door) return res.status(400).json({ error: 'Champ door manquant' });
-  if (!tahoma) return res.status(503).json({ error: 'TaHoma non configuré' });
   try {
-    await tahoma.exec(door, action);
-    console.log(`[OPEN] ${door} ✓`);
+    const { client, devices } = await getClient(req.user.id);
+    const deviceURL = devices[door];
+    if (!deviceURL) return res.status(404).json({ error: `"${door}" introuvable` });
+    const cmd = action === 'close' ? 'close' : action === 'stop' ? 'stop' : 'open';
+    await client.exec(deviceURL, cmd);
     res.json({ ok: true });
-  } catch (e) {
-    console.error(`[OPEN] ${door} ✗`, e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── GET /status ──────────────────────────────────────────────────────────────
-app.get('/status', auth, async (req, res) => {
-  if (!tahoma) return res.status(503).json({ error: 'TaHoma non configuré' });
-  try {
-    const setup = await tahoma.call('GET', '/setup');
-    const result = {};
-    for (const [name, deviceURL] of Object.entries(tahoma.devices)) {
-      if (!deviceURL) continue;
-      const device = setup.devices?.find(d => d.deviceURL === deviceURL);
-      if (!device) continue;
-      const states = {};
-      (device.states || []).forEach(s => { states[s.name] = s.value; });
-      const open   = states['core:OpenClosedState'];
-      const moving = states['core:MovingState'];
-      result[name] = moving ? 'moving' : open === 'open' ? 'open' : 'closed';
-    }
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── POST /alarm ──────────────────────────────────────────────────────────────
 app.post('/alarm', auth, async (req, res) => {
-  const { action } = req.body; // 'arm' | 'disarm'
-  if (!tahoma) return res.status(503).json({ error: 'TaHoma non configuré' });
-  const deviceURL = tahoma.devices.alarm;
-  if (!deviceURL) return res.status(404).json({ error: 'Alarme introuvable dans TaHoma' });
+  const { action } = req.body;
   try {
-    const cmd = action === 'arm' ? 'arm' : 'disarm';
-    await tahoma.call('POST', '/exec/apply', {
-      label: `Sésame — alarme ${cmd}`,
-      actions: [{ deviceURL, commands: [{ name: cmd, parameters: [] }] }],
-    });
-    console.log(`[ALARM] ${cmd} ✓`);
+    const { client, devices } = await getClient(req.user.id);
+    if (!devices.alarm) return res.status(404).json({ error: 'Alarme introuvable' });
+    await client.exec(devices.alarm, action === 'arm' ? 'arm' : 'disarm');
     res.json({ ok: true });
-  } catch (e) {
-    console.error(`[ALARM] ✗`, e.message);
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── GET /health ──────────────────────────────────────────────────────────────
-app.get('/health', (_, res) => res.json({ status: 'ok', devices: tahoma?.devices || {} }));
+app.get('/health', (_, res) => res.json({ status: 'ok' }));
 
 // ── Démarrage ────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log(`Sésame backend démarré sur le port ${PORT}`);
-  if (tahoma) {
-    const ok = await tahoma.login();
-    if (ok) await tahoma.discoverDevices();
-    else console.error('[TaHoma] Connexion impossible');
-  }
+  await init();
 });
