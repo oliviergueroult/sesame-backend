@@ -66,13 +66,13 @@ class TahomaClient {
       (device.states || []).forEach(s => { map[s.name] = s.value; });
 
       if (name === 'alarm') {
-        // Différents états possibles selon le type d'alarme TaHoma
-        const mode = map['myfox:AlarmStatusState']
+        const mode = map['internal:CurrentAlarmModeState']
+                  || map['myfox:AlarmStatusState']
                   || map['TSKAlarm:AlarmModeState']
-                  || map['internal:CurrentAlarmModeState']
                   || map['core:ActiveState'];
         console.log('[TaHoma] alarm states:', JSON.stringify(map));
-        const armed = mode === 'armed' || mode === 'on' || mode === 'triggered' || mode === true || mode === 'true';
+        // "total" et "partial*" = armé ; "off" = désarmé
+        const armed = mode && mode !== 'off' && mode !== 'disarmed' && mode !== false && mode !== 'false';
         result[name] = armed ? 'armed' : 'disarmed';
       } else {
         const open     = map['core:OpenClosedState'];
@@ -84,11 +84,11 @@ class TahomaClient {
     return result;
   }
 
-  async exec(deviceURL, command) {
-    console.log(`[TaHoma] exec ${deviceURL} → ${command}`);
+  async exec(deviceURL, command, parameters = []) {
+    console.log(`[TaHoma] exec ${deviceURL} → ${command}`, parameters);
     return this.call('POST', '/exec/apply', {
       label: `Sésame — ${command}`,
-      actions: [{ deviceURL, commands: [{ name: command, parameters: [] }] }],
+      actions: [{ deviceURL, commands: [{ name: command, parameters }] }],
     });
   }
 }

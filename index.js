@@ -150,7 +150,9 @@ app.post('/alarm', auth, async (req, res) => {
   try {
     const { client, devices } = await getClient(req.user.id);
     if (!devices.alarm) return res.status(404).json({ error: 'Alarme introuvable' });
-    await client.exec(devices.alarm, action === 'arm' ? 'arm' : 'disarm');
+    // Alarmes io TaHoma : arm nécessite le paramètre "total" (armement complet)
+    if (action === 'arm') await client.exec(devices.alarm, 'arm', ['total']);
+    else await client.exec(devices.alarm, 'disarm');
     res.json({ ok: true });
   } catch (e) {
     if (e.response?.status === 401 || e.message?.includes('Login')) clearSession(req.user.id);
