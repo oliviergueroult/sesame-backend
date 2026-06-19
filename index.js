@@ -124,6 +124,28 @@ app.post('/open', auth, async (req, res) => {
   }
 });
 
+// ── GET /status ──────────────────────────────────────────────────────────────
+app.get('/status', auth, async (req, res) => {
+  if (!tahoma) return res.status(503).json({ error: 'TaHoma non configuré' });
+  try {
+    const setup = await tahoma.call('GET', '/setup');
+    const result = {};
+    for (const [name, deviceURL] of Object.entries(tahoma.devices)) {
+      if (!deviceURL) continue;
+      const device = setup.devices?.find(d => d.deviceURL === deviceURL);
+      if (!device) continue;
+      const states = {};
+      (device.states || []).forEach(s => { states[s.name] = s.value; });
+      const open   = states['core:OpenClosedState'];
+      const moving = states['core:MovingState'];
+      result[name] = moving ? 'moving' : open === 'open' ? 'open' : 'closed';
+    }
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── POST /alarm ──────────────────────────────────────────────────────────────
 app.post('/alarm', auth, async (req, res) => {
   const { action } = req.body; // 'arm' | 'disarm'
