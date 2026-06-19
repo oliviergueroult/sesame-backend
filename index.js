@@ -75,12 +75,13 @@ class TahomaClient {
     console.log('[TaHoma] Appareils :', this.devices);
   }
 
-  async open(door) {
+  async exec(door, action) {
     const deviceURL = this.devices[door];
     if (!deviceURL) throw new Error(`Appareil "${door}" introuvable`);
+    const cmd = action === 'close' ? 'close' : 'open';
     return this.call('POST', '/exec/apply', {
-      label: `Sésame — ouvrir ${door}`,
-      actions: [{ deviceURL, commands: [{ name: 'open', parameters: [] }] }],
+      label: `Sésame — ${cmd} ${door}`,
+      actions: [{ deviceURL, commands: [{ name: cmd, parameters: [] }] }],
     });
   }
 }
@@ -108,11 +109,11 @@ app.post('/auth/login', (req, res) => {
 
 // ── POST /open ───────────────────────────────────────────────────────────────
 app.post('/open', auth, async (req, res) => {
-  const { door } = req.body;
+  const { door, action = 'open' } = req.body;
   if (!door) return res.status(400).json({ error: 'Champ door manquant' });
   if (!tahoma) return res.status(503).json({ error: 'TaHoma non configuré' });
   try {
-    await tahoma.open(door);
+    await tahoma.exec(door, action);
     console.log(`[OPEN] ${door} ✓`);
     res.json({ ok: true });
   } catch (e) {
