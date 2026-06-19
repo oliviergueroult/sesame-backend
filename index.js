@@ -19,6 +19,10 @@ function auth(req, res, next) {
   catch { res.status(401).json({ error: 'Token invalide' }); }
 }
 
+// ── Session cache TaHoma (évite un login à chaque requête) ──────────────────
+const sessionCache = new Map(); // userId → { client, expiresAt }
+const SESSION_TTL  = 55 * 60 * 1000; // 55 min
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 async function getUserSystem(userId) {
   const { rows } = await pool.query('SELECT * FROM user_systems WHERE user_id=$1', [userId]);
@@ -28,14 +32,24 @@ async function getUserSystem(userId) {
 async function getClient(userId) {
   const sys = await getUserSystem(userId);
   if (!sys) throw new Error('Système non configuré');
-  if (sys.system_type === 'tahoma') {
-    const { email, password } = sys.credentials;
-    const client = new TahomaClient(email, password);
-    await client.login();
-    return { client, devices: sys.devices };
+  if (sys.system_type !== 'tahoma') throw new Error(`Système "${sys.system_type}" non supporté`);
+
+  const cached = sessionCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { client: cached.client, devices: sys.devices };
   }
-  throw new Error(`Système "${sys.system_type}" non supporté`);
+
+  const { email, password } = sys.credentials;
+  const client = new TahomaClient(email, password);
+  const ok = await client.login();
+  if (!ok) throw new Error('Connexion TaHoma impossible');
+
+  sessionCache.set(userId, { client, expiresAt: Date.now() + SESSION_TTL });
+  console.log(`[session] TaHoma login OK pour user ${userId}`);
+  return { client, devices: sys.devices };
 }
+
+function clearSession(userId) { sessionCache.delete(userId); }
 
 // ── POST /auth/register ──────────────────────────────────────────────────────
 app.post('/auth/register', async (req, res) => {
@@ -106,7 +120,10 @@ app.get('/status', auth, async (req, res) => {
     const { client, devices } = await getClient(req.user.id);
     const status = await client.getStatus(devices);
     res.json(status);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    clearSession(req.user.id);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── POST /open ───────────────────────────────────────────────────────────────
@@ -120,7 +137,10 @@ app.post('/open', auth, async (req, res) => {
     const cmd = action === 'close' ? 'close' : action === 'stop' ? 'stop' : 'open';
     await client.exec(deviceURL, cmd);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    clearSession(req.user.id);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── POST /alarm ──────────────────────────────────────────────────────────────
@@ -131,7 +151,10 @@ app.post('/alarm', auth, async (req, res) => {
     if (!devices.alarm) return res.status(404).json({ error: 'Alarme introuvable' });
     await client.exec(devices.alarm, action === 'arm' ? 'arm' : 'disarm');
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    clearSession(req.user.id);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── GET /health ──────────────────────────────────────────────────────────────
