@@ -44,11 +44,14 @@ class TahomaClient {
   async discoverDevices() {
     const setup   = await this.call('GET', '/setup');
     const devices = {};
+    const labels  = (setup.devices || []).map(d => d.label);
+    console.log('[TaHoma] devices found:', labels);
     for (const d of (setup.devices || [])) {
-      if (/gate|portail|barrier/i.test(d.label) && !devices.portail) devices.portail = d.deviceURL;
-      if (/garage/i.test(d.label)               && !devices.garage)  devices.garage  = d.deviceURL;
-      if (/alarm|alarme|sirene/i.test(d.label)  && !devices.alarm)   devices.alarm   = d.deviceURL;
+      if (/gate|portail|barrier|entr[ée]e|porte.ext/i.test(d.label) && !devices.portail) devices.portail = d.deviceURL;
+      if (/garage/i.test(d.label)                                   && !devices.garage)  devices.garage  = d.deviceURL;
+      if (/alarm|alarme|sir[eè]ne/i.test(d.label)                   && !devices.alarm)   devices.alarm   = d.deviceURL;
     }
+    console.log('[TaHoma] matched:', devices);
     return devices;
   }
 
@@ -63,7 +66,8 @@ class TahomaClient {
       (device.states || []).forEach(s => { states[s.name] = s.value; });
       const open   = states['core:OpenClosedState'];
       const moving = states['core:MovingState'];
-      result[name] = moving ? 'moving' : open === 'open' ? 'open' : 'closed';
+      const isMoving = moving === true || moving === 'true' || moving === 1;
+      result[name] = isMoving ? 'moving' : open === 'open' ? 'open' : 'closed';
     }
     return result;
   }
