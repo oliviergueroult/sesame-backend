@@ -78,7 +78,7 @@ class TahomaClient {
   async exec(door, action) {
     const deviceURL = this.devices[door];
     if (!deviceURL) throw new Error(`Appareil "${door}" introuvable`);
-    const cmd = action === 'close' ? 'close' : 'open';
+    const cmd = action === 'close' ? 'close' : action === 'stop' ? 'stop' : 'open';
     return this.call('POST', '/exec/apply', {
       label: `Sésame — ${cmd} ${door}`,
       actions: [{ deviceURL, commands: [{ name: cmd, parameters: [] }] }],
