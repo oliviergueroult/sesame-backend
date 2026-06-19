@@ -121,7 +121,8 @@ app.get('/status', auth, async (req, res) => {
     const status = await client.getStatus(devices);
     res.json(status);
   } catch (e) {
-    clearSession(req.user.id);
+    // Efface la session seulement si c'est un problème d'auth TaHoma
+    if (e.response?.status === 401 || e.message?.includes('Login')) clearSession(req.user.id);
     res.status(500).json({ error: e.message });
   }
 });
@@ -138,7 +139,7 @@ app.post('/open', auth, async (req, res) => {
     await client.exec(deviceURL, cmd);
     res.json({ ok: true });
   } catch (e) {
-    clearSession(req.user.id);
+    if (e.response?.status === 401 || e.message?.includes('Login')) clearSession(req.user.id);
     res.status(500).json({ error: e.message });
   }
 });
@@ -152,7 +153,7 @@ app.post('/alarm', auth, async (req, res) => {
     await client.exec(devices.alarm, action === 'arm' ? 'arm' : 'disarm');
     res.json({ ok: true });
   } catch (e) {
-    clearSession(req.user.id);
+    if (e.response?.status === 401 || e.message?.includes('Login')) clearSession(req.user.id);
     res.status(500).json({ error: e.message });
   }
 });
